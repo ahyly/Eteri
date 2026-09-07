@@ -27,21 +27,28 @@ jobs:
 
       - name: Unpack project
         run: |
+          rm -rf android_project
           mkdir -p android_project
           unzip -o ether_trials_android_project.zip -d android_project
-          find android_project -maxdepth 2 -type f | head -50
+          sed -i 's/^requirements *=.*/requirements = python3==3.11.14,hostpython3==3.11.14,kivy/' android_project/buildozer.spec
+          grep '^requirements' android_project/buildozer.spec
 
       - name: Install Buildozer
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install "cython<3" buildozer
+          python3 -m pip install buildozer cython
+
+      - name: Clean previous build
+        working-directory: android_project
+        run: |
+          rm -rf .buildozer
 
       - name: Build APK
         working-directory: android_project
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
         run: |
-          buildozer android debug
+          buildozer -v android debug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
