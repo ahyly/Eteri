@@ -1,0 +1,36 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ether_trials_android_project.zip'
+      - '.github/workflows/build-apk.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Unpack game project
+        run: |
+          unzip -o ether_trials_android_project.zip -d android_project
+          ls -la android_project
+
+      - name: Build APK with Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          command: buildozer android debug
+          workdir: android_project
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ether-Trials-Android-APK
+          path: android_project/bin/*.apk
+          if-no-files-found: error
