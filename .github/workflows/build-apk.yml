@@ -30,25 +30,57 @@ jobs:
           rm -rf android_project
           mkdir -p android_project
           unzip -o ether_trials_android_project.zip -d android_project
+
           sed -i 's/^requirements *=.*/requirements = python3==3.11.14,hostpython3==3.11.14,kivy/' android_project/buildozer.spec
-          grep '^requirements' android_project/buildozer.spec
+
+          echo "===== BUILDOZER SETTINGS ====="
+          grep -E '^(package.name|package.domain|requirements|android.api|android.minapi|android.archs)' \
+            android_project/buildozer.spec || true
 
       - name: Install Buildozer
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install buildozer cython
 
-      - name: Clean previous build
-        working-directory: android_project
-        run: |
-          rm -rf .buildozer
-
       - name: Build APK
         working-directory: android_project
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
         run: |
+          rm -rf .buildozer
           buildozer -v android debug
+
+      - name: Diagnose APK
+        working-directory: android_project
+        run: |
+          APK=$(find bin -name "*.apk" | head -1)
+
+          echo "========================================"
+          echo "APK FILE: $APK"
+          echo "========================================"
+          ls -lh "$APK"
+          file "$APK"
+
+          echo ""
+          echo "===== APK CONTENT / ABI ====="
+          unzip -l "$APK" | grep -E 'lib/.*\.so' | head -100 || true
+
+          echo ""
+          echo "===== ANDROID BUILD TOOLS ====="
+          BUILD_TOOLS=$(ls -d $HOME/.buildozer/android/platform/android-sdk/build-tools/* | sort -V | tail -1)
+          echo "$BUILD_TOOLS"
+
+          echo ""
+          echo "===== APK SIGNATURE ====="
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
+
+          echo ""
+          echo "===== MANIFEST / SDK / PACKAGE ====="
+          "$BUILD_TOOLS/aapt" dump badging "$APK" || \
+          "$BUILD_TOOLS/aapt2" dump badging "$APK"
+
+          echo ""
+          echo "===== APK DIAGNOSIS FINISHED ====="
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
