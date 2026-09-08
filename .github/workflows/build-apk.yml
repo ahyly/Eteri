@@ -29,9 +29,10 @@ jobs:
         run: |
           rm -rf android_project
           mkdir -p android_project
-          unzip -o ether_trials_android_project.zip -d android_project
+          unzip -o ether_trials_android_v5_6_crashdebug_full.zip -d android_project
 
           sed -i 's/^requirements *=.*/requirements = python3==3.11.14,hostpython3==3.11.14,kivy/' android_project/buildozer.spec
+          sed -i 's/^android.archs *=.*/android.archs = arm64-v8a,x86_64/' android_project/buildozer.spec
 
           echo "===== BUILDOZER SETTINGS ====="
           grep -E '^(package.name|package.domain|requirements|android.api|android.minapi|android.archs)' \
@@ -50,37 +51,68 @@ jobs:
           rm -rf .buildozer
           buildozer -v android debug
 
-      - name: Diagnose APK
+      - name: Find APK
+        id: apk
         working-directory: android_project
         run: |
           APK=$(find bin -name "*.apk" | head -1)
+          echo "apk=$GITHUB_WORKSPACE/android_project/$APK" >> "$GITHUB_OUTPUT"
+          echo "APK: $APK"
 
-          echo "========================================"
-          echo "APK FILE: $APK"
-          echo "========================================"
-          ls -lh "$APK"
-          file "$APK"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
-          echo ""
-          echo "===== APK CONTENT / ABI ====="
-          unzip -l "$APK" | grep -E 'lib/.*\.so' | head -100 || true
+      - name: Run APK in Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            adb install -r "${{ steps.apk.outputs.apk }}"
 
-          echo ""
-          echo "===== ANDROID BUILD TOOLS ====="
-          BUILD_TOOLS=$(ls -d $HOME/.buildozer/android/platform/android-sdk/build-tools/* | sort -V | tail -1)
-          echo "$BUILD_TOOLS"
+            adb logcat -c
 
-          echo ""
-          echo "===== APK SIGNATURE ====="
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
+            adb shell am force-stop org.ethertrials.ethertrials
+            adb shell monkey -p org.ethertrials.ethertrials -c android.intent.category.LAUNCHER 1 || true
 
-          echo ""
-          echo "===== MANIFEST / SDK / PACKAGE ====="
-          "$BUILD_TOOLS/aapt" dump badging "$APK" || \
-          "$BUILD_TOOLS/aapt2" dump badging "$APK"
+            sleep 20
 
-          echo ""
-          echo "===== APK DIAGNOSIS FINISHED ====="
+            echo "===== PROCESS ====="
+            adb shell pidof org.ethertrials.ethertrials || true
+
+            echo "===== CRASH / PYTHON / KIVY / SDL LOG ====="
+            adb logcat -d \
+              | grep -Ei \
+              'FATAL EXCEPTION|AndroidRuntime|python|kivy|SDL|ethertrials|Traceback|Exception|SIGSEGV|signal 11|UnsatisfiedLinkError|ImportError|ModuleNotFoundError' \
+              | tail -500 \
+              | tee emulator-crash.txt
+
+            echo "===== FULL LAST LOGCAT ====="
+            adb logcat -d | tail -1500 > emulator-logcat-full.txt
+
+            if ! adb shell pidof org.ethertrials.ethertrials >/dev/null; then
+              echo "APP_CRASHED=1" | tee -a emulator-crash.txt
+            else
+              echo "APP_STILL_RUNNING=1" | tee -a emulator-crash.txt
+            fi
+
+      - name: Upload emulator logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ether-Trials-Emulator-Logs
+          path: |
+            emulator-crash.txt
+            emulator-logcat-full.txt
+          if-no-files-found: warn
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
